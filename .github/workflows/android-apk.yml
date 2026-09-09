@@ -33,7 +33,7 @@ jobs:
           gradle-version: '8.9'
 
       - name: Install web dependencies
-        run: npm install --no-audit --no-fund
+        run: npm install --no-audit --no-fund --legacy-peer-deps
 
       - name: Build web app
         run: npm run build
