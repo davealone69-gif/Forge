@@ -38,7 +38,7 @@ jobs:
       - name: Build web app
         run: npm run build
 
-      - name: Copy web client into Android assets
+      - name: Create real SSR client entry for Android
         shell: bash
         run: |
           set -euo pipefail
@@ -53,37 +53,48 @@ jobs:
             cp -a .output/public/. app/src/main/assets/www/
           else
             echo "ERROR: no web build output found"
-            find . -maxdepth 4 -type d \( -path './.vercel/output/static' -o -name dist -o -name public \) -print
             exit 1
           fi
 
-          mkdir -p app/src/main/assets/www/assets
-          client_js="$(find app/src/main/assets/www/assets -maxdepth 1 -type f -name 'index-*.js' | head -n 1)"
-          client_css="$(find app/src/main/assets/www/assets -maxdepth 1 -type f -name '*.css' | head -n 1)"
-          test -n "$client_js"
+          # TanStack Start's production output contains the browser bundle but no
+          # static index when SSR is enabled. Generate the actual root document
+          # through the production preview instead of inventing an empty shell.
+          npx vite preview --host 127.0.0.1 --port 4173 > /tmp/forge-preview.log 2>&1 &
+          PREVIEW_PID=$!
+          trap 'kill "$PREVIEW_PID" 2>/dev/null || true' EXIT
 
-          # TanStack Start emits an SSR client bundle rather than a standalone index.html.
-          # Create the minimal browser entry point for the Android WebView package.
-          cat > app/src/main/assets/www/index.html <<EOF
-          <!doctype html>
-          <html lang="en">
-            <head>
-              <meta charset="UTF-8">
-              <meta name="viewport" content="width=device-width,initial-scale=1">
-              <title>Forge</title>
-              ${client_css:+<link rel="stylesheet" href="./assets/$(basename "$client_css")">}
-            </head>
-            <body>
-              <script type="module" src="./assets/$(basename "$client_js")"></script>
-            </body>
-          </html>
-          EOF
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:4173/ > /tmp/forge-index.html; then
+              break
+            fi
+            sleep 1
+          done
 
-          # The client bundle was built for a web origin. Rewrite static asset URLs
-          # so the bundled app can resolve them from android_asset/www.
-          sed -i 's#"/assets/#"./assets/#g; s#`/assets/#`./assets/#g; s#"/__grok/#"./__grok/#g; s#`/__grok/#`./__grok/#g; s#"/favicon.svg"#"./favicon.svg"#g' "$client_js"
-          test -s app/src/main/assets/www/index.html
-          echo "Android client entry: $(basename "$client_js")"
+          test -s /tmp/forge-index.html
+          grep -q "Describe an app" /tmp/forge-index.html
+          cp /tmp/forge-index.html app/src/main/assets/www/index.html
+
+          # The Android package is served from WebViewAssetLoader's local HTTPS
+          # origin, so root-relative static assets must point into the packaged tree.
+          sed -i \
+            -e 's#href="/assets/#href="./assets/#g' \
+            -e 's#src="/assets/#src="./assets/#g' \
+            -e 's#href="/__grok/#href="./__grok/#g' \
+            -e 's#src="/__grok/#src="./__grok/#g' \
+            -e 's#href="/favicon.svg"#href="./favicon.svg"#g' \
+            app/src/main/assets/www/index.html
+
+          # Rewrite known root-relative asset references in the browser bundle too.
+          find app/src/main/assets/www/assets -maxdepth 1 -type f -name '*.js' -print0 |
+            xargs -0 sed -i \
+              -e 's#"/assets/#"./assets/#g' \
+              -e 's#`/assets/#`./assets/#g' \
+              -e 's#"/__grok/#"./__grok/#g' \
+              -e 's#`/__grok/#`./__grok/#g' \
+              -e 's#"/favicon.svg"#"./favicon.svg"#g'
+
+          grep -q "Describe an app" app/src/main/assets/www/index.html
+          echo "Verified real Forge SSR HTML was packaged."
 
       - name: Build debug APK with Gradle
         run: gradle :app:assembleDebug --no-daemon --stacktrace
