@@ -13,95 +13,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
+      - uses: actions/checkout@v4
       - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
-
-      - name: Setup Gradle 8.9
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-
-      - name: Install web dependencies
-        run: npm install --no-audit --no-fund --legacy-peer-deps
-
-      - name: Build web app
-        run: npm run build
-
-      - name: Create real SSR client entry for Android
-        shell: bash
+      - name: Compile and test native app
         run: |
           set -euo pipefail
-          rm -rf app/src/main/assets/www
-          mkdir -p app/src/main/assets/www
-
-          if [ -d .vercel/output/static ]; then
-            cp -a .vercel/output/static/. app/src/main/assets/www/
-          elif [ -d dist ]; then
-            cp -a dist/. app/src/main/assets/www/
-          elif [ -d .output/public ]; then
-            cp -a .output/public/. app/src/main/assets/www/
-          else
-            echo "ERROR: no web build output found"
-            exit 1
-          fi
-
-          # TanStack Start's production output contains the browser bundle but no
-          # static index when SSR is enabled. Generate the actual root document
-          # through the production preview instead of inventing an empty shell.
-          npx vite preview --host 127.0.0.1 --port 4173 > /tmp/forge-preview.log 2>&1 &
-          PREVIEW_PID=$!
-          trap 'kill "$PREVIEW_PID" 2>/dev/null || true' EXIT
-
-          for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:4173/ > /tmp/forge-index.html; then
-              break
-            fi
-            sleep 1
-          done
-
-          test -s /tmp/forge-index.html
-          grep -q "Describe an app" /tmp/forge-index.html
-          cp /tmp/forge-index.html app/src/main/assets/www/index.html
-
-          # The Android package is served from WebViewAssetLoader's local HTTPS
-          # origin, so root-relative static assets must point into the packaged tree.
-          sed -i \
-            -e 's#href="/assets/#href="./assets/#g' \
-            -e 's#src="/assets/#src="./assets/#g' \
-            -e 's#href="/__grok/#href="./__grok/#g' \
-            -e 's#src="/__grok/#src="./__grok/#g' \
-            -e 's#href="/favicon.svg"#href="./favicon.svg"#g' \
-            app/src/main/assets/www/index.html
-
-          # Rewrite known root-relative asset references in the browser bundle too.
-          find app/src/main/assets/www/assets -maxdepth 1 -type f -name '*.js' -print0 |
-            xargs -0 sed -i \
-              -e 's#"/assets/#"./assets/#g' \
-              -e 's#`/assets/#`./assets/#g' \
-              -e 's#"/__grok/#"./__grok/#g' \
-              -e 's#`/__grok/#`./__grok/#g' \
-              -e 's#"/favicon.svg"#"./favicon.svg"#g'
-
-          grep -q "Describe an app" app/src/main/assets/www/index.html
-          echo "Verified real Forge SSR HTML was packaged."
-
-      - name: Build debug APK with Gradle
-        run: gradle :app:assembleDebug --no-daemon --stacktrace
-
-      - name: Verify APK exists
-        run: test -s app/build/outputs/apk/debug/app-debug.apk
-
+          gradle :app:assembleDebug :app:test --no-daemon --stacktrace
+      - name: Verify APK
+        run: |
+          set -euo pipefail
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          unzip -t app/build/outputs/apk/debug/app-debug.apk >/tmp/apk-unzip-test.txt
+          echo "APK verified: $(stat -c%s app/build/outputs/apk/debug/app-debug.apk) bytes"
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
