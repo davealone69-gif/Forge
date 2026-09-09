@@ -38,12 +38,13 @@ jobs:
       - name: Build web app
         run: npm run build
 
-      - name: Copy web build into Android assets
+      - name: Copy web client into Android assets
         shell: bash
         run: |
           set -euo pipefail
           rm -rf app/src/main/assets/www
           mkdir -p app/src/main/assets/www
+
           if [ -d .vercel/output/static ]; then
             cp -a .vercel/output/static/. app/src/main/assets/www/
           elif [ -d dist ]; then
@@ -55,7 +56,34 @@ jobs:
             find . -maxdepth 4 -type d \( -path './.vercel/output/static' -o -name dist -o -name public \) -print
             exit 1
           fi
+
+          mkdir -p app/src/main/assets/www/assets
+          client_js="$(find app/src/main/assets/www/assets -maxdepth 1 -type f -name 'index-*.js' | head -n 1)"
+          client_css="$(find app/src/main/assets/www/assets -maxdepth 1 -type f -name '*.css' | head -n 1)"
+          test -n "$client_js"
+
+          # TanStack Start emits an SSR client bundle rather than a standalone index.html.
+          # Create the minimal browser entry point for the Android WebView package.
+          cat > app/src/main/assets/www/index.html <<EOF
+          <!doctype html>
+          <html lang="en">
+            <head>
+              <meta charset="UTF-8">
+              <meta name="viewport" content="width=device-width,initial-scale=1">
+              <title>Forge</title>
+              ${client_css:+<link rel="stylesheet" href="./assets/$(basename "$client_css")">}
+            </head>
+            <body>
+              <script type="module" src="./assets/$(basename "$client_js")"></script>
+            </body>
+          </html>
+          EOF
+
+          # The client bundle was built for a web origin. Rewrite static asset URLs
+          # so the bundled app can resolve them from android_asset/www.
+          sed -i 's#"/assets/#"./assets/#g; s#`/assets/#`./assets/#g; s#"/__grok/#"./__grok/#g; s#`/__grok/#`./__grok/#g; s#"/favicon.svg"#"./favicon.svg"#g' "$client_js"
           test -s app/src/main/assets/www/index.html
+          echo "Android client entry: $(basename "$client_js")"
 
       - name: Build debug APK with Gradle
         run: gradle :app:assembleDebug --no-daemon --stacktrace
