@@ -44,13 +44,15 @@ jobs:
           set -euo pipefail
           rm -rf app/src/main/assets/www
           mkdir -p app/src/main/assets/www
-          if [ -d dist ]; then
+          if [ -d .vercel/output/static ]; then
+            cp -a .vercel/output/static/. app/src/main/assets/www/
+          elif [ -d dist ]; then
             cp -a dist/. app/src/main/assets/www/
           elif [ -d .output/public ]; then
             cp -a .output/public/. app/src/main/assets/www/
           else
             echo "ERROR: no web build output found"
-            find . -maxdepth 3 -type d \( -name dist -o -name public \) -print
+            find . -maxdepth 4 -type d \( -path './.vercel/output/static' -o -name dist -o -name public \) -print
             exit 1
           fi
           test -s app/src/main/assets/www/index.html
